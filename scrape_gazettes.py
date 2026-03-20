@@ -1,3 +1,4 @@
+import argparse
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -56,7 +57,12 @@ def download_gaceta_smart(name, start, end):
             print(f"Error on Gazette {num}: {e}")
 
 if __name__ == "__main__":
-    # Ordinary
-    download_gaceta_smart("Ordinaria", 43287, 43325)
-    # Extraordinary
-    download_gaceta_smart("Extraordinaria", 6954, 6990)
+    parser = argparse.ArgumentParser(description="Download Venezuelan Official Gazette PDFs.")
+    parser.add_argument("--ord-start",  type=int, default=43287, help="Ordinaria start number (default: 43287)")
+    parser.add_argument("--ord-end",    type=int, default=43325, help="Ordinaria end number (default: 43325)")
+    parser.add_argument("--ext-start",  type=int, default=6954,  help="Extraordinaria start number (default: 6954)")
+    parser.add_argument("--ext-end",    type=int, default=6990,  help="Extraordinaria end number (default: 6990)")
+    args = parser.parse_args()
+
+    download_gaceta_smart("Ordinaria",      args.ord_start, args.ord_end)
+    download_gaceta_smart("Extraordinaria", args.ext_start, args.ext_end)

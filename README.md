@@ -13,8 +13,21 @@ Downloads gazette PDFs from [gacetaoficial.gob.ve](http://www.gacetaoficial.gob.
 **Requirements:** `pip install requests beautifulsoup4`
 
 ```bash
+# Use default ranges
 python scrape_gazettes.py
+
+# Custom ranges for one or both series
+python scrape_gazettes.py --ord-start 43326 --ord-end 43400
+python scrape_gazettes.py --ext-start 6991 --ext-end 7050
+python scrape_gazettes.py --ord-start 43326 --ord-end 43400 --ext-start 6991 --ext-end 7050
 ```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--ord-start` | `43287` | Ordinaria start number |
+| `--ord-end` | `43325` | Ordinaria end number |
+| `--ext-start` | `6954` | Extraordinaria start number |
+| `--ext-end` | `6990` | Extraordinaria end number |
 
 For each gazette number in the configured range it:
 1. Fetches the wrapper page at `http://www.gacetaoficial.gob.ve/gacetas/{num}`
@@ -30,24 +43,24 @@ Output folders:
 
 Files are named `Gaceta_{num}.pdf`. Gaps in the sequence are normal — they correspond to numbers that don't exist on the server.
 
-To change the range, edit the two calls at the bottom of the script:
-
-```python
-download_gaceta_smart("Ordinaria",      43287, 43325)
-download_gaceta_smart("Extraordinaria",  6954,  6990)
-```
 
 ---
 
 ### `extract_changes.py` — Extract government changes to CSV
 
-Processes all downloaded PDFs and writes `cambios_gobierno_2026.csv`.
+Processes all downloaded PDFs and writes the extracted records to a CSV file.
 
 **Requirements:** `pip install pymupdf`
 
 ```bash
+# Write to the default output file (cambios_gobierno.csv)
 python extract_changes.py
+
+# Write to a custom output file
+python extract_changes.py --output my_file.csv
 ```
+
+**Incremental runs:** if the output file already exists, the script reads it to find the highest gazette number already processed for each series (Ordinaria and Extraordinaria) and skips every PDF up to and including that number — processing only new gazettes. New records are **appended** to the file. Duplicate rows (matched by gazette number, gazette type, person name, and change type) are skipped as an extra safeguard.
 
 **Pipeline per gazette:**
 

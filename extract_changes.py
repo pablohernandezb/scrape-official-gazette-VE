@@ -3,6 +3,7 @@ Extract government changes from Venezuelan Official Gazette PDFs.
 Processes all Ordinaria and Extraordinaria gazettes and outputs a CSV database.
 """
 
+import argparse
 import fitz
 import csv
 import os
@@ -1730,10 +1731,42 @@ def normalize_record_casing(r):
     r["organism"] = _normalize_organism(r.get("organism", ""))
 
 
+def _last_gazette_numbers(csv_path):
+    """Return the highest gazette number seen per type in an existing CSV.
+    Returns a dict like {"Ordinaria": 43310, "Extraordinaria": 6970}.
+    Missing types default to 0.
+    """
+    last = {"Ordinaria": 0, "Extraordinaria": 0}
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            gtype = row.get("gazette_type", "")
+            try:
+                num = int(row.get("gazette_number", 0))
+            except ValueError:
+                continue
+            if gtype in last and num > last[gtype]:
+                last[gtype] = num
+    return last
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Extract government changes from gazette PDFs.")
+    parser.add_argument("--output", default="cambios_gobierno.csv", help="Output CSV filename (default: cambios_gobierno.csv)")
+    args = parser.parse_args()
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     ord_dir = os.path.join(base_dir, "Gacetas_2026_Ordinaria")
     ext_dir = os.path.join(base_dir, "Gacetas_2026_Extraordinaria")
+
+    # If the output file already exists, find the last processed gazette per type
+    # and skip everything up to and including that number.
+    csv_path = os.path.join(base_dir, args.output)
+    start_after = {"Ordinaria": 0, "Extraordinaria": 0}
+    if os.path.exists(csv_path):
+        start_after = _last_gazette_numbers(csv_path)
+        for gtype, num in start_after.items():
+            if num:
+                print(f"Resuming {gtype} from gazette {num + 1} (last seen: {num})")
 
     all_records = []
 
@@ -1744,6 +1777,8 @@ def main():
         for f in sorted(os.listdir(folder)):
             if f.endswith(".pdf"):
                 num = f.replace("Gaceta_", "").replace(".pdf", "")
+                if int(num) <= start_after.get(gtype, 0):
+                    continue
                 path = os.path.join(folder, f)
                 print(f"Processing {gtype} {num}...")
                 try:
@@ -1859,7 +1894,6 @@ def main():
                     normalize_record_casing(r)
 
     # Write CSV
-    csv_path = os.path.join(base_dir, "cambios_gobierno_2026.csv")
     fieldnames = [
         "gazette_number", "gazette_type", "gazette_date", "decree_number",
         "change_type", "person_name", "post_or_position", "institution",
@@ -1867,13 +1901,33 @@ def main():
         "is_military_person", "military_rank", "is_military_post", "summary",
     ]
 
-    with open(csv_path, "w", newline="", encoding="utf-8-sig") as csvfile:
+    file_exists = os.path.exists(csv_path)
+
+    # Load existing keys to avoid duplicates when appending
+    existing_keys = set()
+    if file_exists:
+        with open(csv_path, newline="", encoding="utf-8-sig") as existing_csv:
+            reader = csv.DictReader(existing_csv)
+            for row in reader:
+                key = (row.get("gazette_number"), row.get("gazette_type"), row.get("person_name"), row.get("change_type"))
+                existing_keys.add(key)
+
+    new_records = [
+        r for r in all_records
+        if (r.get("gazette_number"), r.get("gazette_type"), r.get("person_name"), r.get("change_type")) not in existing_keys
+    ]
+
+    with open(csv_path, "a" if file_exists else "w", newline="", encoding="utf-8-sig") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in all_records:
+        if not file_exists:
+            writer.writeheader()
+        for r in new_records:
             writer.writerow(r)
 
-    print(f"\nDone! {len(all_records)} total records written to {csv_path}")
+    if file_exists:
+        print(f"\nDone! {len(new_records)} new records appended to {csv_path} ({len(all_records) - len(new_records)} duplicates skipped)")
+    else:
+        print(f"\nDone! {len(new_records)} total records written to {csv_path}")
 
     # Summary statistics
     types = {}
