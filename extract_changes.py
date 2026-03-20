@@ -16,6 +16,9 @@ def extract_text(pdf_path):
     for page in doc:
         text += page.get_text()
     doc.close()
+    # Fix PDF ligature encoding: chr(191) = '¿' is used for 'fi' ligature in some PDFs
+    # Only replace when ¿ appears inside a word (between letters), not standalone
+    text = re.sub(r'(?<=[a-záéíóúñüA-ZÁÉÍÓÚÑÜ])\u00bf(?=[a-záéíóúñüA-ZÁÉÍÓÚÑÜ])', 'fi', text)
     return text
 
 
@@ -1065,6 +1068,103 @@ def parse_body_decrees(text):
     return results
 
 
+# ─── Institutional reorganization expansion ─────────────────────────
+
+def expand_reorganizacion(pdf_path, gazette_num, gazette_type, date, original_record):
+    """Expand a REORGANIZACION_INSTITUCIONAL record into individual rows
+    by parsing the decree body for suppressions, transfers, and adscription changes."""
+    text = extract_text(pdf_path)
+    norm = re.sub(r"\s+", " ", text)
+    records = []
+
+    base = {
+        "gazette_number": gazette_num,
+        "gazette_type": gazette_type,
+        "gazette_date": date,
+        "decree_number": original_record.get("decree_number", ""),
+        "is_military_person": "NO",
+        "military_rank": "",
+        "is_military_post": "NO",
+    }
+    parent_org = "Ministerio del Poder Popular del Despacho de la Presidencia y Seguimiento de la Gestión de Gobierno"
+
+    # ── Art 2: Transfer of Misión to another Ministry ──
+    m = re.search(
+        r"Se\s+transfiere[^.]+?(Misi[oó]n\s+[^,]+?),?\s+creada\s+mediante.+?al\s+(Ministerio[^.]+?)\.\s+Las",
+        norm, re.IGNORECASE
+    )
+    if m:
+        records.append({**base,
+            "change_type": "TRANSFERENCIA_COMPETENCIAS",
+            "person_name": "",
+            "post_or_position": f"Transferencia de {m.group(1).strip()} al {m.group(2).strip()}",
+            "institution": m.group(1).strip(),
+            "organism": m.group(2).strip(),
+            "summary": f"Art 2: Se transfiere {m.group(1).strip()} al {m.group(2).strip()}",
+        })
+
+    # ── Art 3: Suppressions ──
+    for item_m in re.finditer(
+        r"(\d)\.\s+(?:La\s+|El\s+)((?:Fundaci[oó]n|Centro)\s+[^,]+?)(?:,\s*creada?)",
+        norm, re.IGNORECASE
+    ):
+        entity = item_m.group(2).strip()
+        records.append({**base,
+            "change_type": "SUPRESION_ENTE",
+            "person_name": "",
+            "post_or_position": f"Supresión y liquidación",
+            "institution": entity,
+            "organism": parent_org,
+            "summary": f"Art 3.{item_m.group(1)}: Supresión de {entity}",
+        })
+
+    # ── Art 9: Absorption (Fundación José Félix Ribas → Fundación Misión Negra Hipólita) ──
+    m = re.search(
+        r"Fundaci[oó]n\s+Jos[eé]\s+F[eé]lix\s+Ribas\s+ser[aá]n\s+continuadas\s+por\s+la\s+(Fundaci[oó]n\s+[^,]+?),?\s+adscrita\s+al\s+(Ministerio[^.]+?)\.",
+        norm, re.IGNORECASE
+    )
+    if m:
+        records.append({**base,
+            "change_type": "TRANSFERENCIA_COMPETENCIAS",
+            "person_name": "",
+            "post_or_position": "Absorción de Fundación José Félix Ribas (FUNDARIBAS)",
+            "institution": m.group(1).strip(),
+            "organism": parent_org,
+            "summary": f"Art 9: Fundación José Félix Ribas absorbida por {m.group(1).strip()}",
+        })
+
+    # ── Art 14: Adscription changes ──
+    for item_m in re.finditer(
+        r"Se\s+adscribe\s+al\s+(Ministerio[^.]{10,80}?)\s+"
+        r"(?:el\s+Servicio\s+Desconcentrado\s+denominado\s+|la\s+Fundaci[oó]n\s+|el\s+Consejo\s+Nacional\s+)"
+        r"([^,]+)",
+        norm, re.IGNORECASE
+    ):
+        dest_ministry = item_m.group(1).strip()
+        entity = item_m.group(2).strip()
+        # Prefix back the entity type
+        pre_text = norm[item_m.start():item_m.end()]
+        if "Servicio Desconcentrado" in pre_text:
+            entity_full = "Servicio Desconcentrado " + entity
+        elif "Fundaci" in pre_text:
+            entity_full = "Fundación " + entity
+        elif "Consejo Nacional" in pre_text:
+            entity_full = "Consejo Nacional " + entity
+        else:
+            entity_full = entity
+
+        records.append({**base,
+            "change_type": "CAMBIO_ADSCRIPCION",
+            "person_name": "",
+            "post_or_position": f"Cambio de adscripción al {dest_ministry}",
+            "institution": entity_full,
+            "organism": dest_ministry,
+            "summary": f"Art 14: {entity_full} adscrita al {dest_ministry}",
+        })
+
+    return records
+
+
 # ─── Multi-person entry splitting ────────────────────────────────────
 
 def split_multi_person_entry(entry_text, section_header):
@@ -1204,6 +1304,21 @@ def process_gazette(pdf_path, gazette_num, gazette_type):
             "is_military_post": "SI" if mil_post else "NO",
             "summary": entry[:500],
         })
+
+    # Expand REORGANIZACION_INSTITUCIONAL into individual change records
+    expanded = []
+    for r in records:
+        if r["change_type"] == "REORGANIZACION_INSTITUCIONAL":
+            sub_records = expand_reorganizacion(pdf_path, gazette_num, gazette_type, date, r)
+            if sub_records:
+                # Keep the original as a summary header, add the detailed rows
+                expanded.append(r)
+                expanded.extend(sub_records)
+            else:
+                expanded.append(r)
+        else:
+            expanded.append(r)
+    records = expanded
 
     # Check if we have collective entries that need OCR
     has_collective = any(
