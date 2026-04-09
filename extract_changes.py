@@ -1553,24 +1553,47 @@ def process_gazette(pdf_path, gazette_num, gazette_type):
 
         r["person_name"] = name
 
-    # Deduplicate and remove empty OCR entries
+    # Reclassify DESIGNACION_OTRO where post indicates PRESIDENTE_ENTE
+    for r in records:
+        if r["change_type"] == "DESIGNACION_OTRO":
+            post_lower = r.get("post_or_position", "").lower()
+            if re.match(r"president[ea]?\s*(\(e\))?$", post_lower.strip()):
+                r["change_type"] = "DESIGNACION_PRESIDENTE_ENTE"
+
+    # Normalize name for dedup: strip accents for comparison
+    def _dedup_key(name):
+        """Normalize name for duplicate detection — accent-insensitive."""
+        import unicodedata
+        key = name.upper().strip()
+        # Remove accents: á->A, é->E, etc.
+        key = unicodedata.normalize('NFD', key)
+        key = ''.join(c for c in key if unicodedata.category(c) != 'Mn')
+        return key
+
+    # Deduplicate and remove empty OCR/body entries
     seen = set()
     unique_records = []
     for r in records:
-        name_upper = r.get("person_name", "").upper().strip()
-        is_ocr = r.get("summary", "").startswith("[OCR]")
+        name = r.get("person_name", "").strip()
+        is_secondary = r.get("summary", "").startswith("[OCR]") or r.get("summary", "").startswith("Art")
+        post = r.get("post_or_position", "")
 
         # Remove OCR entries that ended up with no person name (noise)
-        if is_ocr and not name_upper:
+        if r.get("summary", "").startswith("[OCR]") and not name:
             continue
 
-        # Remove OCR entries that duplicate text-parsed entries
-        if name_upper and is_ocr:
-            if name_upper in seen:
+        # For secondary entries (body-parsed or OCR), check if a SUMARIO entry
+        # already has the same person with the same post in the same gazette
+        if name and is_secondary:
+            key = (_dedup_key(name), r.get("gazette_number", ""), post.upper().strip()[:30])
+            if key in seen:
                 continue
 
-        if name_upper:
-            seen.add(name_upper)
+        # Track all named entries for dedup
+        if name:
+            key_broad = (_dedup_key(name), r.get("gazette_number", ""), r.get("post_or_position", "").upper().strip()[:30])
+            seen.add(key_broad)
+
         unique_records.append(r)
 
     return unique_records

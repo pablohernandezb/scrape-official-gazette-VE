@@ -3,7 +3,8 @@
     "allow": [
       "Bash(pip list:*)",
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:www.gacetaoficial.gob.ve)"
     ]
   }
 }
